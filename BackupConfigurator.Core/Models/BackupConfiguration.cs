@@ -81,7 +81,8 @@ public class BackupConfiguration
         {
             if (string.IsNullOrWhiteSpace(AzureSasToken))
                 return string.Empty;
-            return AzureSasToken.TrimStart().StartsWith('?') ? AzureSasToken : $"?{AzureSasToken}";
+            var trimmed = AzureSasToken.Trim();
+            return trimmed.StartsWith('?') ? trimmed : $"?{trimmed}";
         }
     }
 }

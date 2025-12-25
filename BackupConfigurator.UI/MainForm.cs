@@ -334,7 +334,11 @@ public partial class MainForm : Form
         
         if (!string.IsNullOrWhiteSpace(txtAzCopyPath.Text))
         {
-            dialog.InitialDirectory = Path.GetDirectoryName(txtAzCopyPath.Text);
+            var dirPath = Path.GetDirectoryName(txtAzCopyPath.Text);
+            if (!string.IsNullOrWhiteSpace(dirPath))
+            {
+                dialog.InitialDirectory = dirPath;
+            }
             dialog.FileName = Path.GetFileName(txtAzCopyPath.Text);
         }
 
