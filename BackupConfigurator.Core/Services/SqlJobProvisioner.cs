@@ -7,11 +7,15 @@ namespace BackupConfigurator.Core.Services;
 public class SqlJobProvisioner
 {
     private readonly ILogger _logger;
-    private const string AppDataFolder = @"C:\ProgramData\BackupConfigurator";
 
     public SqlJobProvisioner(ILogger logger)
     {
         _logger = logger;
+    }
+
+    private static string GetScriptsPath(BackupConfiguration config)
+    {
+        return Path.Combine(config.LocalBasePath, config.SanitizedDatabaseName, "scripts");
     }
 
     public async Task<ValidationResult> InstallJobsAsync(BackupConfiguration config)
@@ -19,20 +23,35 @@ public class SqlJobProvisioner
         var result = new ValidationResult();
         try
         {
-            _logger.Information("Installing SQL Agent jobs for {NIT}/{Database}", config.SanitizedNIT, config.SanitizedDatabaseName);
+            _logger.Information("Installing SQL Agent jobs for database {Database}", config.SanitizedDatabaseName);
 
             var connectionString = SqlTester.BuildConnectionString(config);
             using var connection = new SqlConnection(connectionString);
             await connection.OpenAsync();
+
+            // Check if SQL Server Agent is running
+            var agentCheck = await CheckSqlAgentStatusAsync(connection);
+            result.AddDetail(agentCheck.Message);
+            foreach (var detail in agentCheck.Details)
+            {
+                result.AddDetail(detail);
+            }
+
+            if (!agentCheck.Success)
+            {
+                result.Success = false;
+                result.Message = agentCheck.Message;
+                return result;
+            }
 
             // Change to msdb context
             using var useCmd = new SqlCommand("USE msdb", connection);
             await useCmd.ExecuteNonQueryAsync();
 
             // Job names
-            var fullJobName = $"BK_{config.SanitizedNIT}_{config.SanitizedDatabaseName}_FULL_WEEKLY";
-            var diffJobName = $"BK_{config.SanitizedNIT}_{config.SanitizedDatabaseName}_DIFF_EVERY_{config.DifferentialIntervalHours}H";
-            var cleanupJobName = $"BK_{config.SanitizedNIT}_{config.SanitizedDatabaseName}_CLEANUP_DAILY";
+            var fullJobName = $"BK_{config.SanitizedDatabaseName}_FULL_WEEKLY";
+            var diffJobName = $"BK_{config.SanitizedDatabaseName}_DIFF_EVERY_{config.DifferentialIntervalHours}H";
+            var cleanupJobName = $"BK_{config.SanitizedDatabaseName}_CLEANUP_DAILY";
 
             // Remove existing jobs (idempotent)
             await RemoveJobIfExistsAsync(connection, fullJobName);
@@ -69,7 +88,7 @@ public class SqlJobProvisioner
         var result = new ValidationResult();
         try
         {
-            _logger.Information("Removing SQL Agent jobs for {NIT}/{Database}", config.SanitizedNIT, config.SanitizedDatabaseName);
+            _logger.Information("Removing SQL Agent jobs for database {Database}", config.SanitizedDatabaseName);
 
             var connectionString = SqlTester.BuildConnectionString(config);
             using var connection = new SqlConnection(connectionString);
@@ -80,9 +99,9 @@ public class SqlJobProvisioner
             await useCmd.ExecuteNonQueryAsync();
 
             // Job names
-            var fullJobName = $"BK_{config.SanitizedNIT}_{config.SanitizedDatabaseName}_FULL_WEEKLY";
-            var diffJobName = $"BK_{config.SanitizedNIT}_{config.SanitizedDatabaseName}_DIFF_EVERY_{config.DifferentialIntervalHours}H";
-            var cleanupJobName = $"BK_{config.SanitizedNIT}_{config.SanitizedDatabaseName}_CLEANUP_DAILY";
+            var fullJobName = $"BK_{config.SanitizedDatabaseName}_FULL_WEEKLY";
+            var diffJobName = $"BK_{config.SanitizedDatabaseName}_DIFF_EVERY_{config.DifferentialIntervalHours}H";
+            var cleanupJobName = $"BK_{config.SanitizedDatabaseName}_CLEANUP_DAILY";
 
             var removed = 0;
             if (await RemoveJobIfExistsAsync(connection, fullJobName))
@@ -157,13 +176,13 @@ public class SqlJobProvisioner
         var hour = int.Parse(timeParts[0]);
         var minute = int.Parse(timeParts[1]);
 
-        var basePath = Path.Combine(config.LocalBasePath, config.SanitizedNIT, config.SanitizedDatabaseName, "FULL");
-        var uploadScriptPath = Path.Combine(AppDataFolder, "scripts", "upload_full.cmd");
+        var basePath = Path.Combine(config.LocalBasePath, config.SanitizedDatabaseName, "FULL");
+        var uploadScriptPath = Path.Combine(GetScriptsPath(config), "upload_full.cmd");
 
         // Step 1: Backup to disk
         var backupSql = $@"
 DECLARE @FileName NVARCHAR(500)
-SET @FileName = '{basePath}\{config.SanitizedNIT}_{config.SanitizedDatabaseName}_FULL_' + 
+SET @FileName = '{basePath}\{config.SanitizedDatabaseName}_FULL_' + 
     CONVERT(VARCHAR, GETDATE(), 112) + '_' + 
     REPLACE(CONVERT(VARCHAR, GETDATE(), 108), ':', '') + '.bak'
 
@@ -211,7 +230,8 @@ EXEC msdb.dbo.sp_add_jobstep
     @subsystem = 'CmdExec',
     @command = @Command,
     @on_success_action = 1,
-    @on_fail_action = 2
+    @on_fail_action = 2,
+    @flags = 0
 ";
         using var step2Cmd = new SqlCommand(addStep2Sql, connection);
         step2Cmd.Parameters.AddWithValue("@JobName", jobName);
@@ -219,6 +239,9 @@ EXEC msdb.dbo.sp_add_jobstep
         await step2Cmd.ExecuteNonQueryAsync();
 
         // Create schedule (weekly on specified day and time)
+        // freq_type = 8: Weekly
+        // freq_interval = bitmask for day (1=Sunday, 2=Monday, etc.)
+        // freq_recurrence_factor = 1: Every 1 week
         var scheduleName = $"{jobName}_Schedule";
         var dayOfWeek = (int)config.FullBackupDayOfWeek + 1; // SQL Server uses 1=Sunday
 
@@ -227,6 +250,7 @@ EXEC msdb.dbo.sp_add_schedule
     @schedule_name = @ScheduleName,
     @freq_type = 8,
     @freq_interval = @DayOfWeek,
+    @freq_recurrence_factor = 1,
     @active_start_time = @ActiveStartTime
 ";
         using var scheduleCmd = new SqlCommand(addScheduleSql, connection);
@@ -260,13 +284,13 @@ EXEC msdb.dbo.sp_add_jobserver
 
     private async Task CreateDiffBackupJobAsync(SqlConnection connection, BackupConfiguration config, string jobName)
     {
-        var basePath = Path.Combine(config.LocalBasePath, config.SanitizedNIT, config.SanitizedDatabaseName, "DIFF");
-        var uploadScriptPath = Path.Combine(AppDataFolder, "scripts", "upload_diff.cmd");
+        var basePath = Path.Combine(config.LocalBasePath, config.SanitizedDatabaseName, "DIFF");
+        var uploadScriptPath = Path.Combine(GetScriptsPath(config), "upload_diff.cmd");
 
         // Step 1: Differential backup to disk
         var backupSql = $@"
 DECLARE @FileName NVARCHAR(500)
-SET @FileName = '{basePath}\{config.SanitizedNIT}_{config.SanitizedDatabaseName}_DIFF_' + 
+SET @FileName = '{basePath}\{config.SanitizedDatabaseName}_DIFF_' + 
     CONVERT(VARCHAR, GETDATE(), 112) + '_' + 
     REPLACE(CONVERT(VARCHAR, GETDATE(), 108), ':', '') + '.dif'
 
@@ -322,18 +346,26 @@ EXEC msdb.dbo.sp_add_jobstep
         await step2Cmd.ExecuteNonQueryAsync();
 
         // Create schedule (daily, every N hours)
+        // freq_type = 4: Daily
+        // freq_interval = 1: Every 1 day
+        // freq_subday_type = 8: Hours
+        // freq_subday_interval = N: Every N hours
+        // freq_recurrence_factor = 1: Every 1 day (required when freq_type = 4)
         var scheduleName = $"{jobName}_Schedule";
+        var intervalHours = Math.Max(1, config.DifferentialIntervalHours); // Ensure at least 1 hour
+        
         var addScheduleSql = @"
 EXEC msdb.dbo.sp_add_schedule
     @schedule_name = @ScheduleName,
     @freq_type = 4,
     @freq_interval = 1,
     @freq_subday_type = 8,
-    @freq_subday_interval = @SubdayInterval
+    @freq_subday_interval = @SubdayInterval,
+    @freq_recurrence_factor = 1
 ";
         using var scheduleCmd = new SqlCommand(addScheduleSql, connection);
         scheduleCmd.Parameters.AddWithValue("@ScheduleName", scheduleName);
-        scheduleCmd.Parameters.AddWithValue("@SubdayInterval", config.DifferentialIntervalHours);
+        scheduleCmd.Parameters.AddWithValue("@SubdayInterval", intervalHours);
         await scheduleCmd.ExecuteNonQueryAsync();
 
         // Attach schedule to job
@@ -361,7 +393,7 @@ EXEC msdb.dbo.sp_add_jobserver
 
     private async Task CreateCleanupJobAsync(SqlConnection connection, BackupConfiguration config, string jobName)
     {
-        var cleanupScriptPath = Path.Combine(AppDataFolder, "scripts", "cleanup_local.cmd");
+        var cleanupScriptPath = Path.Combine(GetScriptsPath(config), "cleanup_local.cmd");
 
         // Create job
         var createJobSql = @"
@@ -392,12 +424,16 @@ EXEC msdb.dbo.sp_add_jobstep
         await stepCmd.ExecuteNonQueryAsync();
 
         // Create schedule (daily at 03:30)
+        // freq_type = 4: Daily
+        // freq_interval = 1: Every day
+        // freq_recurrence_factor = 1: Every 1 day (required)
         var scheduleName = $"{jobName}_Schedule";
         var addScheduleSql = @"
 EXEC msdb.dbo.sp_add_schedule
     @schedule_name = @ScheduleName,
     @freq_type = 4,
     @freq_interval = 1,
+    @freq_recurrence_factor = 1,
     @active_start_time = 33000
 ";
         using var scheduleCmd = new SqlCommand(addScheduleSql, connection);
@@ -425,5 +461,90 @@ EXEC msdb.dbo.sp_add_jobserver
         await serverCmd.ExecuteNonQueryAsync();
 
         _logger.Information("Created cleanup job: {JobName}", jobName);
+    }
+
+    private async Task<ValidationResult> CheckSqlAgentStatusAsync(SqlConnection connection)
+    {
+        var result = new ValidationResult();
+        try
+        {
+            _logger.Information("Checking SQL Server Agent status");
+
+            // Check if xp_servicecontrol is available
+            var checkServiceSql = @"
+DECLARE @ServiceStatus VARCHAR(50)
+EXEC master.dbo.xp_servicecontrol N'QueryState', N'SQLServerAGENT'
+";
+
+            string? agentStatus = null;
+            
+            try
+            {
+                using var cmd = new SqlCommand(checkServiceSql, connection);
+                using var reader = await cmd.ExecuteReaderAsync();
+                if (reader.Read())
+                {
+                    agentStatus = reader.GetString(0);
+                }
+            }
+            catch (SqlException ex) when (ex.Number == 229 || ex.Number == 15281)
+            {
+                // Permission denied for xp_servicecontrol, try alternative method
+                _logger.Warning("Cannot use xp_servicecontrol, trying alternative method");
+            }
+
+            // Alternative method: Check if we can access msdb and sysjobs
+            if (string.IsNullOrEmpty(agentStatus))
+            {
+                var checkMsdbSql = @"
+SELECT 
+    CASE 
+        WHEN DATABASEPROPERTYEX('msdb', 'Status') = 'ONLINE' 
+        THEN 'Running'
+        ELSE 'Stopped'
+    END AS AgentStatus
+";
+                using var msdbCmd = new SqlCommand(checkMsdbSql, connection);
+                agentStatus = (string?)await msdbCmd.ExecuteScalarAsync();
+            }
+
+            // Try to query sysjobs to verify SQL Agent is accessible
+            var testJobsSql = "SELECT COUNT(*) FROM msdb.dbo.sysjobs";
+            using var testCmd = new SqlCommand(testJobsSql, connection);
+            await testCmd.ExecuteScalarAsync();
+
+            if (agentStatus != null && (agentStatus.Contains("Running", StringComparison.OrdinalIgnoreCase) || 
+                                        agentStatus.Contains("ONLINE", StringComparison.OrdinalIgnoreCase)))
+            {
+                result.Success = true;
+                result.Message = "✓ SQL Server Agent is running";
+                result.AddDetail("SQL Server Agent service is active and accessible");
+                _logger.Information("SQL Server Agent is running");
+            }
+            else
+            {
+                result.Success = false;
+                result.Message = "SQL Server Agent is not running or not accessible";
+                result.AddDetail("SQL Server Agent must be running to create scheduled jobs");
+                result.AddDetail("Please start the SQL Server Agent service:");
+                result.AddDetail("  1. Open SQL Server Configuration Manager");
+                result.AddDetail("  2. Find 'SQL Server Agent' service");
+                result.AddDetail("  3. Right-click → Start");
+                result.AddDetail("  Or run in PowerShell as Administrator:");
+                result.AddDetail("     Start-Service 'SQLServerAGENT' (or 'SQLAgent$INSTANCENAME')");
+                _logger.Warning("SQL Server Agent is not running");
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Error checking SQL Server Agent status");
+            result.Success = false;
+            result.Message = "Failed to verify SQL Server Agent status";
+            result.AddDetail($"Error: {ex.Message}");
+            result.AddDetail("Ensure SQL Server Agent service is running before installing jobs");
+            return result;
+        }
     }
 }

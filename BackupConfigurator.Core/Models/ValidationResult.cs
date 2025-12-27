@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace BackupConfigurator.Core.Models;
 
 public class ValidationResult
@@ -13,9 +15,9 @@ public class ValidationResult
 
     public static ValidationResult Fail(string message, List<string>? details = null)
     {
-        return new ValidationResult 
-        { 
-            Success = false, 
+        return new ValidationResult
+        {
+            Success = false,
             Message = message,
             Details = details ?? new List<string>()
         };
@@ -23,6 +25,7 @@ public class ValidationResult
 
     public void AddDetail(string detail)
     {
+        Debug.WriteLine($"Validation Detail: {detail}");
         Details.Add(detail);
     }
 

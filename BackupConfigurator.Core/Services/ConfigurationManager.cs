@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using BackupConfigurator.Core.Models;
 using Serilog;
@@ -7,34 +8,67 @@ namespace BackupConfigurator.Core.Services;
 public class ConfigurationManager
 {
     private readonly ILogger _logger;
-    private const string AppDataFolder = @"C:\ProgramData\BackupConfigurator";
-    private const string ConfigFileName = "config.json";
 
     public ConfigurationManager(ILogger logger)
     {
         _logger = logger;
     }
 
-    public string ConfigFilePath => Path.Combine(AppDataFolder, ConfigFileName);
+    private static string GetConfigFilePath(BackupConfiguration config)
+    {
+        if (string.IsNullOrWhiteSpace(config.LocalBasePath) || 
+            string.IsNullOrWhiteSpace(config.SanitizedDatabaseName))
+        {
+            throw new InvalidOperationException("LocalBasePath and DatabaseName must be set before saving configuration");
+        }
+
+        return Path.Combine(config.LocalBasePath, config.SanitizedDatabaseName, "config.json");
+    }
 
     public ValidationResult SaveConfiguration(BackupConfiguration config)
     {
         try
         {
-            _logger.Information("Saving configuration to {ConfigPath}", ConfigFilePath);
+            var configPath = GetConfigFilePath(config);
+            var directory = Path.GetDirectoryName(configPath);
 
-            Directory.CreateDirectory(AppDataFolder);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            // Create a copy without the SQL password (security)
+            var configToSave = new BackupConfiguration
+            {
+                InstitutionNIT = config.InstitutionNIT,
+                SqlServer = config.SqlServer,
+                SqlUser = config.SqlUser,
+                SqlPassword = string.Empty, // DO NOT SAVE PASSWORD
+                DatabaseName = config.DatabaseName,
+                DifferentialIntervalHours = config.DifferentialIntervalHours,
+                FullBackupDayOfWeek = config.FullBackupDayOfWeek,
+                FullBackupTime = config.FullBackupTime,
+                LocalBasePath = config.LocalBasePath,
+                LocalRetentionDays = config.LocalRetentionDays,
+                AzureContainerUrl = config.AzureContainerUrl,
+                AzureSasToken = config.AzureSasToken,
+                AzCopyPath = config.AzCopyPath,
+                InstallationKeyHash = config.InstallationKeyHash
+            };
 
             var options = new JsonSerializerOptions
             {
-                WriteIndented = true
+                WriteIndented = true,
+                // Keep ampersands and other characters unescaped for readability
+                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
             };
 
-            var json = JsonSerializer.Serialize(config, options);
-            File.WriteAllText(ConfigFilePath, json);
+            var json = JsonSerializer.Serialize(configToSave, options);
+            File.WriteAllText(configPath, json);
 
-            _logger.Information("Configuration saved successfully");
-            return ValidationResult.Ok($"Configuration saved to: {ConfigFilePath}");
+            _logger.Information("Configuration saved to {ConfigPath}", configPath);
+
+            return ValidationResult.Ok($"Configuration saved to: {configPath}");
         }
         catch (Exception ex)
         {
@@ -47,29 +81,61 @@ public class ConfigurationManager
     {
         try
         {
-            if (!File.Exists(ConfigFilePath))
+            // Search in common backup locations
+            var searchPaths = new List<string>();
+            
+            var commonDrives = new[] { "D:\\", "E:\\", "F:\\", "C:\\" };
+            foreach (var drive in commonDrives.Where(Directory.Exists))
             {
-                _logger.Information("Configuration file not found");
-                return (null, ValidationResult.Fail("Configuration file not found"));
+                try
+                {
+                    var backupFolders = Directory.GetDirectories(drive, "*", SearchOption.TopDirectoryOnly)
+                        .Where(d => d.Contains("Backup", StringComparison.OrdinalIgnoreCase) || 
+                                    d.Contains("Respaldo", StringComparison.OrdinalIgnoreCase));
+
+                    foreach (var folder in backupFolders.Take(5))
+                    {
+                        var possibleConfigs = Directory.GetFiles(folder, "config.json", SearchOption.AllDirectories).Take(5);
+                        searchPaths.AddRange(possibleConfigs);
+                    }
+                }
+                catch
+                {
+                    // Ignore access errors
+                }
             }
 
-            _logger.Information("Loading configuration from {ConfigPath}", ConfigFilePath);
-
-            var json = File.ReadAllText(ConfigFilePath);
-            var config = JsonSerializer.Deserialize<BackupConfiguration>(json);
-
-            if (config == null)
+            foreach (var configPath in searchPaths.Where(File.Exists))
             {
-                return (null, ValidationResult.Fail("Failed to deserialize configuration"));
+                try
+                {
+                    var json = File.ReadAllText(configPath);
+                    var config = JsonSerializer.Deserialize<BackupConfiguration>(json);
+
+                    if (config != null)
+                    {
+                        // Clean the configuration after loading
+                        config.CleanOnLoad();
+                        
+                        _logger.Information("Configuration loaded from {ConfigPath}", configPath);
+                        var result = ValidationResult.Ok($"Configuration loaded from: {configPath}");
+                        result.AddDetail("? SQL Password not saved for security - will be requested when needed");
+                        return (config, result);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.Warning(ex, "Failed to load configuration from {ConfigPath}", configPath);
+                }
             }
 
-            _logger.Information("Configuration loaded successfully");
-            return (config, ValidationResult.Ok("Configuration loaded successfully"));
+            _logger.Warning("No configuration file found");
+            return (null, ValidationResult.Fail("No configuration file found"));
         }
         catch (Exception ex)
         {
-            _logger.Error(ex, "Failed to load configuration");
-            return (null, ValidationResult.Fail($"Failed to load configuration: {ex.Message}"));
+            _logger.Error(ex, "Error loading configuration");
+            return (null, ValidationResult.Fail($"Error loading configuration: {ex.Message}"));
         }
     }
 }

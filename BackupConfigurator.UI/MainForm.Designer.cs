@@ -141,27 +141,10 @@ namespace BackupConfigurator.UI
 
             // Azure Container URL
             var lblAzureUrl = new Label { Text = "Azure Container URL:", Location = new System.Drawing.Point(xLabel, yPos), Width = labelWidth };
-            txtAzureContainerUrl = new TextBox { Location = new System.Drawing.Point(xInput, yPos), Width = inputWidth };
+            txtAzureContainerUrl = new TextBox { Location = new System.Drawing.Point(xInput, yPos), Width = inputWidth, Multiline = true, Height = 60, ScrollBars = ScrollBars.Vertical };
             tabPageConfig.Controls.Add(lblAzureUrl);
             tabPageConfig.Controls.Add(txtAzureContainerUrl);
-            yPos += lineHeight;
-
-            // Azure SAS Token
-            var lblSasToken = new Label { Text = "Azure SAS Token:", Location = new System.Drawing.Point(xLabel, yPos), Width = labelWidth };
-            txtAzureSasToken = new TextBox { Location = new System.Drawing.Point(xInput, yPos), Width = inputWidth, UseSystemPasswordChar = true };
-            tabPageConfig.Controls.Add(lblSasToken);
-            tabPageConfig.Controls.Add(txtAzureSasToken);
-            yPos += lineHeight;
-
-            // AzCopy Path
-            var lblAzCopy = new Label { Text = "AzCopy Path:", Location = new System.Drawing.Point(xLabel, yPos), Width = labelWidth };
-            txtAzCopyPath = new TextBox { Location = new System.Drawing.Point(xInput, yPos), Width = 500, Text = @"C:\Program Files\Microsoft\AzCopy\azcopy.exe" };
-            var btnBrowseAzCopy = new Button { Text = "Browse...", Location = new System.Drawing.Point(xInput + 510, yPos - 2), Width = 90 };
-            btnBrowseAzCopy.Click += BtnBrowseAzCopy_Click;
-            tabPageConfig.Controls.Add(lblAzCopy);
-            tabPageConfig.Controls.Add(txtAzCopyPath);
-            tabPageConfig.Controls.Add(btnBrowseAzCopy);
-            yPos += lineHeight + 20;
+            yPos += 70;
 
             // Buttons
             btnLoadConfig = new Button { Text = "Load Config", Location = new System.Drawing.Point(xLabel, yPos), Width = 120 };
@@ -171,6 +154,10 @@ namespace BackupConfigurator.UI
             btnSaveConfig = new Button { Text = "Save Config", Location = new System.Drawing.Point(xLabel + 130, yPos), Width = 120 };
             btnSaveConfig.Click += BtnSaveConfig_Click;
             tabPageConfig.Controls.Add(btnSaveConfig);
+
+            var btnSetKey = new Button { Text = "Set Installation Key", Location = new System.Drawing.Point(xLabel + 260, yPos), Width = 150 };
+            btnSetKey.Click += BtnSetKey_Click;
+            tabPageConfig.Controls.Add(btnSetKey);
         }
 
         private void InitializeActionsTab()
@@ -193,6 +180,13 @@ namespace BackupConfigurator.UI
             btnInstall = new Button { Text = "Install/Configure Jobs", Location = new System.Drawing.Point(20, yPos), Width = 200, Height = 40 };
             btnInstall.Click += BtnInstall_Click;
             tabPageActions.Controls.Add(btnInstall);
+            yPos += 60;
+
+            // Download All from Azure Button
+            btnDownloadFromAzure = new Button { Text = "Download All from Azure", Location = new System.Drawing.Point(20, yPos), Width = 200, Height = 40 };
+            btnDownloadFromAzure.Click += BtnDownloadFromAzure_Click;
+            btnDownloadFromAzure.BackColor = System.Drawing.Color.LightBlue;
+            tabPageActions.Controls.Add(btnDownloadFromAzure);
             yPos += 60;
 
             // Remove All Button
@@ -256,8 +250,6 @@ namespace BackupConfigurator.UI
         private TextBox txtLocalBasePath;
         private NumericUpDown numLocalRetention;
         private TextBox txtAzureContainerUrl;
-        private TextBox txtAzureSasToken;
-        private TextBox txtAzCopyPath;
         private Button btnLoadConfig;
         private Button btnSaveConfig;
 
@@ -265,6 +257,7 @@ namespace BackupConfigurator.UI
         private Button btnTestSql;
         private Button btnTestAzure;
         private Button btnInstall;
+        private Button btnDownloadFromAzure;
         private Button btnRemoveAll;
         private TextBox txtResults;
 

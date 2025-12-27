@@ -1,4 +1,6 @@
 using System.Text.Json.Serialization;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace BackupConfigurator.Core.Models;
 
@@ -43,6 +45,9 @@ public class BackupConfiguration
     [JsonPropertyName("azCopyPath")]
     public string AzCopyPath { get; set; } = @"C:\Program Files\Microsoft\AzCopy\azcopy.exe";
 
+    [JsonPropertyName("installationKeyHash")]
+    public string InstallationKeyHash { get; set; } = string.Empty;
+
     /// <summary>
     /// Sanitizes a string to be safe for use in file paths and job names
     /// </summary>
@@ -63,6 +68,40 @@ public class BackupConfiguration
     }
 
     /// <summary>
+    /// Generates SHA256 hash of the installation key
+    /// </summary>
+    public static string HashInstallationKey(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return string.Empty;
+
+        using var sha256 = SHA256.Create();
+        var bytes = Encoding.UTF8.GetBytes(key);
+        var hash = sha256.ComputeHash(bytes);
+        return Convert.ToBase64String(hash);
+    }
+
+    /// <summary>
+    /// Validates an installation key against the stored hash
+    /// </summary>
+    public bool ValidateInstallationKey(string key)
+    {
+        if (string.IsNullOrWhiteSpace(InstallationKeyHash))
+            return true; // No key set, allow operation
+
+        var inputHash = HashInstallationKey(key);
+        return inputHash == InstallationKeyHash;
+    }
+
+    /// <summary>
+    /// Sets the installation key (stores the hash)
+    /// </summary>
+    public void SetInstallationKey(string key)
+    {
+        InstallationKeyHash = HashInstallationKey(key);
+    }
+
+    /// <summary>
     /// Gets the sanitized NIT for use in paths and job names
     /// </summary>
     public string SanitizedNIT => Sanitize(InstitutionNIT);
@@ -73,7 +112,7 @@ public class BackupConfiguration
     public string SanitizedDatabaseName => Sanitize(DatabaseName);
 
     /// <summary>
-    /// Gets the normalized SAS token (ensures it starts with ?)
+    /// Gets the normalized SAS token (ensures it starts with ? and removes all whitespace)
     /// </summary>
     public string NormalizedSasToken
     {
@@ -81,8 +120,30 @@ public class BackupConfiguration
         {
             if (string.IsNullOrWhiteSpace(AzureSasToken))
                 return string.Empty;
-            var trimmed = AzureSasToken.Trim();
-            return trimmed.StartsWith('?') ? trimmed : $"?{trimmed}";
+            
+            // Remove ALL whitespace characters (spaces, tabs, newlines, carriage returns)
+            var cleaned = new string(AzureSasToken.Where(c => !char.IsWhiteSpace(c)).ToArray());
+            
+            // Ensure it starts with ?
+            return cleaned.StartsWith('?') ? cleaned : $"?{cleaned}";
+        }
+    }
+
+    /// <summary>
+    /// Called after deserialization to clean up any invalid data
+    /// </summary>
+    public void CleanOnLoad()
+    {
+        // Clean the SAS token by removing all whitespace
+        if (!string.IsNullOrWhiteSpace(AzureSasToken))
+        {
+            AzureSasToken = new string(AzureSasToken.Where(c => !char.IsWhiteSpace(c)).ToArray());
+        }
+        
+        // Clean the Container URL by removing trailing whitespace
+        if (!string.IsNullOrWhiteSpace(AzureContainerUrl))
+        {
+            AzureContainerUrl = AzureContainerUrl.Trim().TrimEnd('/');
         }
     }
 }

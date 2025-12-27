@@ -10,13 +10,13 @@ static class Program
     [STAThread]
     static void Main()
     {
-        // Configure Serilog
-        var logPath = Path.Combine(@"C:\ProgramData\BackupConfigurator\logs", $"log-{DateTime.Now:yyyyMMdd}.txt");
-        Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+        // Configure initial Serilog to Temp folder (until configuration is loaded)
+        var tempLogPath = Path.Combine(Path.GetTempPath(), "BackupConfigurator", $"log-{DateTime.Now:yyyyMMdd}.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(tempLogPath)!);
 
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
-            .WriteTo.File(logPath, rollingInterval: RollingInterval.Day)
+            .WriteTo.File(tempLogPath, rollingInterval: RollingInterval.Day)
             .CreateLogger();
 
         try
