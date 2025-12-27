@@ -8,7 +8,7 @@ Write-Host ""
 
 # Step 1: Build portable executable
 Write-Host "Step 1: Building portable executable..." -ForegroundColor Yellow
-& .\publish-portable.ps1
+.\publish-portable.ps1
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed. Aborting package creation." -ForegroundColor Red
