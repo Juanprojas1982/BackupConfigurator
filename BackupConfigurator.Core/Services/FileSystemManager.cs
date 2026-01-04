@@ -367,6 +367,7 @@ public class FileSystemManager
                 "\r\n" +
                 "REM ===== Upload FULL backups to Azure Blob Storage =====\r\n" +
                 "REM SAS token loaded from config.json to avoid command-line escaping issues\r\n" +
+                "REM OPTIMIZED: Only uploads NEW or MODIFIED files (cost reduction)\r\n" +
                 "\r\n" +
                 "REM ===== Paths =====\r\n" +
                 $"set AZCOPY=\"{azCopyPath}\"\r\n" +
@@ -391,8 +392,10 @@ public class FileSystemManager
                 "REM ===== Build complete destination URL =====\r\n" +
                 "set DST=!DST_BASE!?!SAS_TOKEN!\r\n" +
                 "\r\n" +
-                "REM ===== Execute AzCopy =====\r\n" +
-                "%AZCOPY% copy \"%SRC%\" \"!DST!\" --overwrite=true --recursive=false\r\n" +
+                "REM ===== Execute AzCopy with incremental upload =====\r\n" +
+                "REM --overwrite=ifSourceNewer: Only upload if source is newer than destination\r\n" +
+                "REM This REDUCES COSTS by avoiding unnecessary uploads and write operations\r\n" +
+                "%AZCOPY% copy \"%SRC%\" \"!DST!\" --overwrite=ifSourceNewer --check-md5=NoCheck --recursive=false\r\n" +
                 "\r\n" +
                 "set EXIT_CODE=%errorlevel%\r\n" +
                 "set SAS_TOKEN=\r\n" +
@@ -410,6 +413,7 @@ public class FileSystemManager
                 "\r\n" +
                 "REM ===== Upload DIFF backups to Azure Blob Storage =====\r\n" +
                 "REM SAS token loaded from config.json to avoid command-line escaping issues\r\n" +
+                "REM OPTIMIZED: Only uploads NEW or MODIFIED files (cost reduction)\r\n" +
                 "\r\n" +
                 "REM ===== Paths =====\r\n" +
                 $"set AZCOPY=\"{azCopyPath}\"\r\n" +
@@ -434,8 +438,10 @@ public class FileSystemManager
                 "REM ===== Build complete destination URL =====\r\n" +
                 "set DST=!DST_BASE!?!SAS_TOKEN!\r\n" +
                 "\r\n" +
-                "REM ===== Execute AzCopy =====\r\n" +
-                "%AZCOPY% copy \"%SRC%\" \"!DST!\" --overwrite=true --recursive=false\r\n" +
+                "REM ===== Execute AzCopy with incremental upload =====\r\n" +
+                "REM --overwrite=ifSourceNewer: Only upload if source is newer than destination\r\n" +
+                "REM This REDUCES COSTS by avoiding unnecessary uploads and write operations\r\n" +
+                "%AZCOPY% copy \"%SRC%\" \"!DST!\" --overwrite=ifSourceNewer --check-md5=NoCheck --recursive=false\r\n" +
                 "\r\n" +
                 "set EXIT_CODE=%errorlevel%\r\n" +
                 "set SAS_TOKEN=\r\n" +
@@ -452,7 +458,9 @@ public class FileSystemManager
             result.AddDetail($"DIFF upload: {diffScriptPath}");
             result.AddDetail($"Using AzCopy: {azCopyPath}");
             result.AddDetail("? SAS token loaded dynamically from config.json");
-            result.AddDetail("? SAS passed via AZCOPY_SAS_TOKEN environment variable");
+            result.AddDetail("? OPTIMIZED: Only uploads NEW or MODIFIED files");
+            result.AddDetail("? COST REDUCTION: Avoids re-uploading existing files");
+            result.AddDetail("   (Uses --overwrite=ifSourceNewer for incremental uploads)");
             return result;
         }
         catch (Exception ex)
